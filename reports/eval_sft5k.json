@@ -1,0 +1,11 @@
+{
+ "nom": "sft5k",
+ "ekranlar": 200,
+ "kompilyatsiya_%": 92.0,
+ "render_%": 92.0,
+ "vis_sim_ortacha": 0.434,
+ "vis_sim_mediana": 0.442,
+ "vis_sim_0.7_dan_yuqori_%": 14.5,
+ "matn_topildi_ortacha": 0.786,
+ "screen_fn_yoq": 0
+}

@@ -1,0 +1,46 @@
+{
+ "reference": {
+  "nom": "reference",
+  "ekranlar": 200,
+  "kompilyatsiya_%": 100.0,
+  "render_%": 100.0,
+  "vis_sim_ortacha": 0.796,
+  "vis_sim_mediana": 0.784,
+  "vis_sim_0.7_dan_yuqori_%": 74.5,
+  "matn_topildi_ortacha": 1.0,
+  "screen_fn_yoq": 0
+ },
+ "sft5k": {
+  "nom": "sft5k",
+  "ekranlar": 200,
+  "kompilyatsiya_%": 92.0,
+  "render_%": 92.0,
+  "vis_sim_ortacha": 0.434,
+  "vis_sim_mediana": 0.442,
+  "vis_sim_0.7_dan_yuqori_%": 14.5,
+  "matn_topildi_ortacha": 0.786,
+  "screen_fn_yoq": 0
+ },
+ "qwen_base_sampled": {
+  "nom": "qwen_base_sampled",
+  "ekranlar": 200,
+  "kompilyatsiya_%": 7.5,
+  "render_%": 7.5,
+  "vis_sim_ortacha": 0.014,
+  "vis_sim_mediana": 0.0,
+  "vis_sim_0.7_dan_yuqori_%": 0.0,
+  "matn_topildi_ortacha": 0.602,
+  "screen_fn_yoq": 46
+ },
+ "qwen_base": {
+  "nom": "qwen_base",
+  "ekranlar": 200,
+  "kompilyatsiya_%": 10.0,
+  "render_%": 10.0,
+  "vis_sim_ortacha": 0.013,
+  "vis_sim_mediana": 0.0,
+  "vis_sim_0.7_dan_yuqori_%": 0.0,
+  "matn_topildi_ortacha": 0.371,
+  "screen_fn_yoq": 110
+ }
+}

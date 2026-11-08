@@ -1,0 +1,11 @@
+{
+ "nom": "reference",
+ "ekranlar": 200,
+ "kompilyatsiya_%": 100.0,
+ "render_%": 100.0,
+ "vis_sim_ortacha": 0.796,
+ "vis_sim_mediana": 0.784,
+ "vis_sim_0.7_dan_yuqori_%": 74.5,
+ "matn_topildi_ortacha": 1.0,
+ "screen_fn_yoq": 0
+}

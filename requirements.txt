@@ -1,0 +1,15 @@
+# Python 3.11+ (sinalgan: 3.14), NVIDIA GPU + CUDA drayveri
+torch==2.15.0
+torchvision==0.29.2
+transformers==5.22.2
+peft==0.21.2
+trl==1.17.1
+bitsandbytes==0.50.2
+accelerate==1.15.0
+datasets==5.1.0
+kernels==0.18.1
+flash-linear-attention==0.6.0
+qwen-vl-utils==0.0.14
+numpy==2.5.4
+pillow==13.0.0
+pyarrow==26.0.1

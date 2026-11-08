@@ -1,0 +1,7 @@
+{
+ "train": 5000,
+ "test": 200,
+ "test_ilovalar": 200,
+ "train_ilovalar": 1982,
+ "kesishgan_ilova": 0
+}
