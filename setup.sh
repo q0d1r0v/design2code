@@ -79,7 +79,7 @@ step "5/6 O'qitilgan adapter ($ADAPTER_TAG)"
 A=runs/sft_5k/final; mkdir -p "$A"
 for f in adapter_config.json adapter_model.safetensors; do
   [ -s "$A/$f" ] && { echo "  bor: $f"; continue; }
-  curl -fSL --retry 5 -C - -o "$A/$f" "$REPO_URL/releases/download/$ADAPTER_TAG/$f" || die "$f yuklanmadi"
+  curl -fL --progress-bar --retry 5 -C - -o "$A/$f" "$REPO_URL/releases/download/$ADAPTER_TAG/$f" || die "$f yuklanmadi"
 done
 .venv-train/bin/python -I - "$A" <<'EOF'
 import hashlib, json, sys
