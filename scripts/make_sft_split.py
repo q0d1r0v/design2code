@@ -1,10 +1,10 @@
-"""6-qadam tayyorgarligi: o'qitish (5 000) va imtihon (200) to'plamlari.
+"""Prepares step 6: the training (5,000) and test (200) sets.
 
-Imtihon ekranlari butunlay boshqa ilovalardan olinadi (o'qitishda o'sha ilova umuman yo'q),
-shunda model "yodlab olgani" emas, haqiqatan ko'chira olishi tekshiriladi.
-O'qitish: vis_sim >= 0.7 (kod asl rasmga o'xshash), kod <= 3000 token, har ilovadan ko'pi bilan 4 ta,
-bir xil layout takrorlanmaydi.
-Natija: data/sft/train_5k.parquet (id, package, image, code), data/sft/test_200.parquet (id, package, image, code)
+Test screens come from completely different apps (those apps never appear in training),
+so the test checks real generalisation, not memorisation.
+Training: vis_sim >= 0.7 (code matches the original), code <= 3000 tokens, at most 4 per app,
+no repeated layouts.
+Output: data/sft/train_5k.parquet (id, package, image, code), data/sft/test_200.parquet (id, package, image, code)
 """
 import collections, glob, json, os, random
 import pyarrow as pa, pyarrow.parquet as pq
@@ -14,7 +14,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 random.seed(42)
 tok = AutoTokenizer.from_pretrained(f"{ROOT}/models/Qwen3.5-4B")
 
-# toza ma'lumotdan layout_key va qaysi shard'da ekanligi
+# layout_key and shard location from the clean data
 lk, shard_of = {}, {}
 for f in sorted(glob.glob(f"{ROOT}/data/clean/shard_*.parquet")):
     t = pq.read_table(f, columns=["id", "layout_key"])
@@ -28,12 +28,12 @@ for f in sorted(glob.glob(f"{ROOT}/data/pairs/batch_*.parquet")):
         rows.append((i, p, v, c))
 pkgs = sorted({r[1] for r in rows})
 random.shuffle(pkgs)
-test_pkgs = set(pkgs[:330])           # 330 ta ilova faqat imtihon uchun (ulardan 200 ta ekran tanlanadi)
+test_pkgs = set(pkgs[:330])           # 330 apps reserved for testing (200 screens are picked from them)
 
 test, train_pool = [], []
 for r in rows:
     (test if r[1] in test_pkgs else train_pool).append(r)
-# imtihon: har ilovadan 1 ta, vis_sim >= 0.6 (asl rasm va tuzilish mos keladigan ekranlar)
+# test: 1 per app, vis_sim >= 0.6 (screens whose screenshot matches the hierarchy)
 by_p = collections.defaultdict(list)
 for r in test:
     if r[2] >= 0.6: by_p[r[1]].append(r)
@@ -64,7 +64,7 @@ for name, sel in (("train_5k", train_sel), ("test_200", test_sel)):
     pq.write_table(pa.table({"id": [r[0] for r in sel], "package": [r[1] for r in sel],
                              "image": [im[r[0]] for r in sel], "code": [r[3] for r in sel]}),
                    f"{ROOT}/data/sft/{name}.parquet")
-rep = {"train": len(train_sel), "test": len(test_sel), "test_ilovalar": len({r[1] for r in test_sel}),
-       "train_ilovalar": len(per_pkg), "kesishgan_ilova": len({r[1] for r in test_sel} & set(per_pkg))}
+rep = {"train": len(train_sel), "test": len(test_sel), "test_apps": len({r[1] for r in test_sel}),
+       "train_apps": len(per_pkg), "overlapping_apps": len({r[1] for r in test_sel} & set(per_pkg))}
 json.dump(rep, open(f"{ROOT}/reports/sft_split.json", "w"), indent=1)
 print(rep)

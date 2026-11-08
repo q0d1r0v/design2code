@@ -1,10 +1,10 @@
-"""Ekran tuzilishi (view hierarchy) + asl skrinshot -> Jetpack Compose kodi.
+"""View hierarchy + original screenshot -> Jetpack Compose code.
 
-Qoidaga asoslangan (AI emas) konverter. Asosiy g'oya:
-  * daraxtni soddalashtirish (bo'sh/ortiqcha konteynerlarni olib tashlash),
-  * har bir konteyner uchun joylashuvni geometriyadan aniqlash: Column / Row / Box,
-  * ranglar, shrift o'lchami, matn tekislanishi va burchak radiusini skrinshot piksellaridan o'lchash.
-Barcha o'lchamlar px -> dp (zichlik 420 dpi, 1 dp = 2.625 px).
+Rule-based converter (no AI). Main ideas:
+  * simplify the tree (drop empty or redundant containers),
+  * infer each container's layout from geometry: Column / Row / Box,
+  * measure colors, font size, text alignment and corner radius from the screenshot pixels.
+All sizes are px -> dp (density 420 dpi, 1 dp = 2.625 px).
 """
 import io
 import json
@@ -52,10 +52,10 @@ import androidx.compose.ui.unit.sp
 
 
 class Skip(Exception):
-    """Ekranni konvertatsiya qilib bo'lmaydi (sababi bilan)."""
+    """The screen cannot be converted (with a reason)."""
 
 
-# ---------------------------------------------------------------- yordamchilar
+# ---------------------------------------------------------------- helpers
 def short(cls):
     return (cls or "").split(".")[-1].split("$")[0]
 
@@ -65,7 +65,7 @@ def dp(px):
 
 
 def kstr(s):
-    """Kotlin satr literali (xavfsiz escape)."""
+    """Kotlin string literal (safe escaping)."""
     s = s[:MAX_TEXT]
     out = []
     for ch in s:
@@ -95,7 +95,7 @@ FONT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 
 def fit_font(text, font, width_px):
-    """Bir qatorli matn berilgan kenglikka sig'maguncha shriftni kichraytiradi (Roboto o'lchamlari bilan)."""
+    """Shrinks the font until single-line text fits the given width (using Roboto metrics)."""
     from PIL import ImageFont
     t = text.split("\n")[0][:MAX_TEXT]
     while font > 8:
@@ -104,7 +104,7 @@ def fit_font(text, font, width_px):
             f = _FONTS[font] = ImageFont.truetype(FONT_PATH, int(round(font * DENSITY)))
         try:
             length = f.getlength(t)
-        except Exception:  # raqm ba'zi murakkab belgilarda ishlamaydi -> oddiy o'lchagich, so'ng taxmin
+        except Exception:  # raqm fails on some complex glyphs -> basic layout, then an estimate
             try:
                 fb = _FONTS.get(("basic", font))
                 if fb is None:
@@ -120,7 +120,7 @@ def fit_font(text, font, width_px):
 
 
 class Px:
-    """Skrinshot piksellaridan rang/shrift o'lchash."""
+    """Measures colors and fonts from screenshot pixels."""
 
     def __init__(self, img):
         self.a = np.asarray(img.convert("RGB"), dtype=np.int16)
@@ -134,7 +134,7 @@ class Px:
         if r.size == 0:
             return None
         h, w = r.shape[:2]
-        step = max(1, int(np.sqrt(h * w / 20000)))  # katta hududlarda siyrak namuna (tezlik uchun)
+        step = max(1, int(np.sqrt(h * w / 20000)))  # sparse sampling on large regions (for speed)
         p = r[::step, ::step].reshape(-1, 3)
         q = p // 8
         key = (q[:, 0].astype(np.int32) << 10) | (q[:, 1].astype(np.int32) << 5) | q[:, 2]
@@ -143,8 +143,8 @@ class Px:
         return tuple(int(v) for v in p[key == top].mean(0)), float(cnt[top] / len(key))
 
     def ring_color(self, b, inset=3):
-        """Element foni: chetlar bo'ylab rang bir xil bo'lsa va ichkarida ham shu rang davom etsa
-        (aks holda bu ramka/chegara chizig'i, fon emas)."""
+        """Element background: the color is uniform along the edges and continues further inside
+        (otherwise it is a frame or border line, not a background)."""
         c = self._ring(b, inset)
         if c is None:
             return None
@@ -162,8 +162,8 @@ class Px:
         a = self.a
         edges = [a[y1 + inset, x1 + inset:x2 - inset], a[y2 - 1 - inset, x1 + inset:x2 - inset],
                  a[y1 + inset:y2 - inset, x1 + inset], a[y1 + inset:y2 - inset, x2 - 1 - inset]]
-        # har bir chet alohida: bir xil rangli chetlar; kamida 3 tasi bir xil rangda bo'lsa -> fon rangi
-        # (bitta chetdagi chiziq/soya fon aniqlanishiga xalaqit bermaydi)
+        # each edge separately: uniform edges; if at least 3 share a color -> background color
+        # (a line or shadow on one edge does not break background detection)
         good = []
         for e in edges:
             med = np.median(e, axis=0)
@@ -179,14 +179,14 @@ class Px:
         return tuple(int(v) for v in r.reshape(-1, 3).mean(0)) if r.size else (128, 128, 128)
 
     def text_style(self, b, bg=None, text="", excl=()):
-        """(rang, shrift_dp, qatorlar, gorizontal tekislash, vertikal tekislash, siyoh qutisi)."""
+        """(color, font_dp, lines, horizontal alignment, vertical alignment)."""
         r = self.region(b)
         if r.size == 0:
             return None
         bgc = np.asarray(bg if bg is not None else self.mode(b)[0], float)
         d = np.sqrt(((r - bgc) ** 2).sum(2))
         mask = d > 70
-        for e in excl:  # qo'shni elementlar (masalan, sarlavha ustidagi ikonka) siyoh hisobiga kirmasin
+        for e in excl:  # neighbouring elements (e.g. an icon above a title) must not count as ink
             ex1, ey1 = max(e[0] - b[0], 0), max(e[1] - b[1], 0)
             ex2, ey2 = min(e[2] - b[0], mask.shape[1]), min(e[3] - b[1], mask.shape[0])
             if ex2 > ex1 and ey2 > ey1:
@@ -208,8 +208,8 @@ class Px:
         if not bands:
             return None
         hb = sorted(x[1] - x[0] for x in bands)
-        # Siyoh balandligi / shrift o'lchami nisbati matn harflariga bog'liq (Roboto metrikalari):
-        # tepasi: bosh harf/raqam/baland harf bo'lsa ~0.73em, faqat kichik harflar ~0.53em; pasti: g,j,p,q,y bo'lsa +0.21em
+        # Ink height / font size ratio depends on the letters (Roboto metrics):
+        # top: capitals/digits/ascenders ~0.73em, only lowercase ~0.53em; bottom: g,j,p,q,y add +0.21em
         top = 0.76 if re.search(r"[A-Z0-9bdfhklt]|[^\x00-\x7f]", text or "A") else 0.55
         low = 0.22 if re.search(r"[gjpqy,;()]", text or "") else 0.0
         font_px = hb[len(hb) // 2] / (top + low)
@@ -227,7 +227,7 @@ class Px:
         return col, font, len(bands), ha, va
 
     def corner_radius(self, b, fill):
-        """Burchakdan diagonal bo'yicha to'ldirish rangigacha masofa -> radius (dp)."""
+        """Diagonal distance from the corner to the fill color -> radius (dp)."""
         x1, y1, x2, y2 = b
         lim = min(x2 - x1, y2 - y1) // 2
         for k in range(0, lim):
@@ -236,7 +236,7 @@ class Px:
         return dp(lim)
 
     def fill_box(self, b, fill):
-        """Element ichidagi to'ldirish rangi egallagan haqiqiy quti (Material insetlarni olib tashlash)."""
+        """The real box covered by the fill color inside the element (removes Material insets)."""
         r = self.region(b)
         m = np.abs(r - np.asarray(fill)).sum(2) < 30
         rows, cols = np.where(m.any(1))[0], np.where(m.any(0))[0]
@@ -246,7 +246,7 @@ class Px:
         return [x1 + int(cols[0]), y1 + int(rows[0]), x1 + int(cols[-1]) + 1, y1 + int(rows[-1]) + 1]
 
 
-# ---------------------------------------------------------------- daraxt
+# ---------------------------------------------------------------- tree
 class Node:
     __slots__ = ("v", "b", "kids", "kind", "text", "bg", "excl")
 
@@ -285,7 +285,7 @@ def build_tree(views):
         fix(r, screen)
     roots = [r for r in roots if r.w >= 3 and r.h >= 3]
     if not roots:
-        raise Skip("bosh_daraxt")
+        raise Skip("empty_tree")
     if len(roots) == 1:
         return roots[0]
     top = Node({"class": "FrameLayout"}, screen)
@@ -297,7 +297,7 @@ def classify(n):
     v, c = n.v, short(n.v.get("class"))
     txt = (v.get("text") or "").strip()
     cd = (v.get("content_description") or "").strip()
-    # Flutter/RN: matn ko'pincha content_description'da turadi
+    # Flutter/RN: text often lives in content_description
     if not txt and cd and not n.kids and re.search(r"\w", cd) and \
             c in GENERIC_CLS | TEXT_CLS | BUTTON_CLS | CHECK_CLS | RADIO_CLS | SWITCH_CLS:
         txt = cd
@@ -323,7 +323,7 @@ def classify(n):
 
 
 def simplify(n, px, parent_bg):
-    """Turini aniqlash, bo'sh konteynerlarni olib tashlash, bitta bolali konteynerlarni yig'ish."""
+    """Classify nodes, drop empty containers, collapse single-child containers."""
     n.kind = classify(n)
     own = px.ring_color(n.b)
     distinct = own is not None and cdist(own, parent_bg) > 12
@@ -356,17 +356,17 @@ def simplify(n, px, parent_bg):
 
 
 def _lift(k, n):
-    # bitta bola: ota-konteyner o'rnini bola egallaydi, lekin ota konteyner scroll bo'lsa, scroll yo'qolmasin
+    # single child: the child replaces its parent, but keep scrolling if the parent was a scroll container
     if short(n.v.get("class")) in SCROLL_V | SCROLL_H and k.kind == "container" and \
             short(k.v.get("class")) not in SCROLL_V | SCROLL_H:
         k.v = dict(k.v, _scroll=short(n.v.get("class")))
     return k
 
 
-# ---------------------------------------------------------------- kod yozish
-SPLIT_TOTAL = 60      # ekran shundan katta bo'lsa, qismlarga bo'linadi
-SPLIT_MIN = 12        # shuncha va undan ko'p elementli konteyner alohida funksiyaga ajratiladi
-FUNC_MAX = 90         # bitta funksiyadagi elementlar chegarasi (JVM 64 KB metod chegarasidan uzoq turish uchun)
+# ---------------------------------------------------------------- code generation
+SPLIT_TOTAL = 60      # screens larger than this are split into parts
+SPLIT_MIN = 12        # containers with at least this many nodes become a separate function
+FUNC_MAX = 90         # node limit per function (stays well below the JVM 64 KB method limit)
 
 
 def subtree_size(n):
@@ -378,8 +378,8 @@ class Writer:
         self.px = px
         self.name = name
         self.lines = []
-        self.local = 0       # shu funksiyadagi elementlar
-        # butun ekran bo'yicha umumiy hisoblagichlar (qism-funksiyalar bilan bo'lishiladi)
+        self.local = 0       # nodes in this function
+        # screen-wide counters (shared with the part functions)
         self.sh = shared if shared is not None else {"count": 0, "texts": 0, "ink": 0, "parts": [], "split": False}
 
     @property
@@ -414,9 +414,9 @@ class Writer:
         return "box"
 
     def node(self, n, depth, pos_mod):
-        """pos_mod: ota konteyner bergan joylashuv modifikatori (padding/offset)."""
+        """pos_mod: position modifier given by the parent container (padding/offset)."""
         if self.sh["split"] and n.kind == "container" and subtree_size(n) >= SPLIT_MIN:
-            # katta qismni alohida @Composable funksiyaga ajratish
+            # move a large subtree into its own @Composable function
             part = f"{self.name}Part{len(self.sh['parts']) + 1}"
             self.sh["parts"].append(None)
             idx = len(self.sh["parts"]) - 1
@@ -426,7 +426,7 @@ class Writer:
             w2.k_container(n, 1, "", base="modifier")
             w2.emit(0, "}")
             if w2.local > FUNC_MAX:
-                raise Skip("funksiya_juda_katta")
+                raise Skip("function_too_large")
             self.sh["parts"][idx] = "\n".join(w2.lines)
             self.emit(depth, f"{part}(Modifier{pos_mod})" if pos_mod else f"{part}()")
             return
@@ -435,7 +435,7 @@ class Writer:
         k = n.kind
         getattr(self, "k_" + k)(n, depth, pos_mod)
 
-    # --- konteyner
+    # --- container
     def k_container(self, n, depth, pos_mod, root=False, base="Modifier"):
         lay = self.layout(n)
         for c in n.kids:
@@ -481,7 +481,7 @@ class Writer:
                 self.node(c, depth + 1, off)
             self.emit(depth, "}")
 
-    # --- barglar
+    # --- leaves
     def _text_args(self, n, bg, sty, size_known=True):
         col, font, lines, ha, va = sty
         hdp = dp(n.b[3]) - dp(n.b[1])
@@ -533,7 +533,7 @@ class Writer:
         if fill is not None and cdist(fill, n.bg) > 20:
             fb = self.px.fill_box(n.b, fill)
             if fb[2] - fb[0] >= 6 and fb[3] - fb[1] >= 6:
-                # Material insetlar: tashqi bo'shliqni padding qilib qoldiramiz
+                # Material insets: keep the outer gap as padding
                 pt, pb = dp(fb[1]) - dp(n.b[1]), dp(n.b[3]) - dp(fb[3])
                 pl, pr = dp(fb[0]) - dp(n.b[0]), dp(n.b[2]) - dp(fb[2])
                 inner = Node(n.v, fb)
@@ -567,7 +567,7 @@ class Writer:
         self.emit(depth, "}")
 
     def k_field(self, n, depth, pos_mod):
-        # ramka chiziqlari siyoh hisobiga kirmasligi uchun ichki hudud (har chetdan 10 px) tahlil qilinadi
+        # analyse the inner area (10 px from each edge) so frame lines do not count as ink
         ib = [n.b[0] + 10, n.b[1] + 10, n.b[2] - 10, n.b[3] - 10] if n.w > 40 and n.h > 30 else n.b
         sty = self.px.text_style(ib, n.bg, n.text, n.excl) if n.text else None
         hdp = dp(n.b[3]) - dp(n.b[1])
@@ -642,10 +642,10 @@ class Writer:
 
 
 def convert(views, image_bytes, name, max_nodes=250):
-    """-> (kotlin_funksiya_matni, elementlar_soni). Skip istisnosi: ekran tashlab yuboriladi."""
+    """-> (kotlin_code, node_count, text_sync). Raises Skip when the screen is dropped."""
     img = Image.open(io.BytesIO(image_bytes))
     if img.size != (SCREEN_W, SCREEN_H):
-        raise Skip("rasm_olchami")
+        raise Skip("bad_image_size")
     px = Px(img)
     root = build_tree(views)
     root_bg = px.ring_color([0, 0, SCREEN_W, SCREEN_H], inset=2) or px.mode([0, 0, SCREEN_W, SCREEN_H])[0]
@@ -653,10 +653,10 @@ def convert(views, image_bytes, name, max_nodes=250):
     root.text = ""
     root.kids = [k for k in (simplify(k, px, root_bg) for k in root.kids) if k is not None]
     if not root.kids:
-        raise Skip("bosh_ekran")
+        raise Skip("empty_screen")
     root.bg = root_bg
     if subtree_size(root) > max_nodes:
-        raise Skip("juda_kop_element")
+        raise Skip("too_many_nodes")
     w = Writer(px, name)
     w.sh["split"] = subtree_size(root) > SPLIT_TOTAL
     w.emit(0, "@Composable")
@@ -664,11 +664,11 @@ def convert(views, image_bytes, name, max_nodes=250):
     w.k_container(root, 1, "", root=True)
     w.emit(0, "}")
     if w.local > FUNC_MAX:
-        raise Skip("funksiya_juda_katta")
+        raise Skip("function_too_large")
     if w.count > max_nodes:
-        raise Skip("juda_kop_element")
+        raise Skip("too_many_nodes")
     if w.count < 3:
-        raise Skip("juda_kam_element")
+        raise Skip("too_few_nodes")
     sync = w.texts_ink / w.texts if w.texts else 1.0
     code = "\n\n".join(["\n".join(w.lines)] + [p for p in w.sh["parts"] if p])
     return code, w.count, sync

@@ -1,10 +1,10 @@
-# katta yoki qayta yasaladigan narsalar
+# large or regenerable files
 /data/
 /models/
 /runs/
 /tools/
 /logs/
-/natija/
+/output/
 /.venv/
 /.venv-train/
 /render1/
@@ -19,8 +19,10 @@ build/
 render/local.properties
 render/screens/src/main/kotlin/uz/d2c/screens/gen/
 
-# mahalliy yordamchilar
+# local helpers
 .nomedia
 .trackerignore
 scripts/pause_after_save.sh
 scripts/qwen_progress.sh
+reports/old_version_batches.json
+reports/redo_converter_error_batches.json

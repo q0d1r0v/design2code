@@ -1,11 +1,11 @@
 {
- "nom": "sft5k",
- "ekranlar": 200,
- "kompilyatsiya_%": 92.0,
+ "name": "sft5k",
+ "screens": 200,
+ "compile_%": 92.0,
  "render_%": 92.0,
- "vis_sim_ortacha": 0.434,
- "vis_sim_mediana": 0.442,
- "vis_sim_0.7_dan_yuqori_%": 14.5,
- "matn_topildi_ortacha": 0.786,
- "screen_fn_yoq": 0
+ "vis_sim_mean": 0.434,
+ "vis_sim_median": 0.442,
+ "vis_sim_at_least_0.7_%": 14.5,
+ "text_recall_mean": 0.786,
+ "no_screen_fn": 0
 }

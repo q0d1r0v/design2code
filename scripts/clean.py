@@ -1,12 +1,12 @@
-"""2-qadam: MobileViews ekranlarini tozalash.
+"""Step 2: clean the MobileViews screens.
 
-Olib tashlanadi: bo'sh, gorizontal, tizim oynalari, WebView, asosan nomsiz 'View'dan iborat
-(Flutter/RN/Compose), juda kam yoki juda ko'p elementli, matnsiz ekranlar.
-Rasm 1080x1704 ga kesiladi (status bar va pastki navigatsiya/qora qism olib tashlanadi),
-element koordinatalari ham shunga moslab suriladi.
+Dropped: empty, landscape, system windows, WebView, mostly generic 'View' nodes
+(Flutter/RN/Compose), too few or too many nodes, screens without text.
+Images are cropped to 1080x1704 (status bar and bottom navigation/black area removed),
+and node coordinates are shifted to match.
 
-Natija: data/clean/shard_XXX.parquet (id, package, layout_key, image, views) + reports/clean_report.json
-Ishga tushirish: .venv/bin/python -I scripts/clean.py
+Output: data/clean/shard_XXX.parquet (id, package, layout_key, image, views) + reports/clean_report.json
+Run: .venv-train/bin/python -I scripts/clean.py
 """
 import collections, io, json, os, sys, time
 from multiprocessing import Pool
@@ -18,7 +18,7 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PARQ = f"{ROOT}/data/raw/mobileviews/MobileViews_Screenshots_ViewHierarchies/Parquets/MobileViews_400000-522301.parquet"
 OUT = f"{ROOT}/data/clean"
-TOP, BOTTOM, W = 72, 1776, 1080  # ilova ko'rinadigan maydon (status bar va nav bar'siz)
+TOP, BOTTOM, W = 72, 1776, 1080  # visible app area (without status and navigation bars)
 
 SYSTEM_PKGS = ("android", "com.android.", "com.google.android.", "com.sec.android.")
 KEEP_FIELDS = ("class", "text", "content_description", "resource_id", "clickable", "editable",
@@ -42,33 +42,33 @@ def process(group):
         try:
             d = json.loads(js)
         except Exception:
-            reasons["json_xato"] += 1; continue
+            reasons["json_error"] += 1; continue
         views = [v for v in d.get("views") or [] if v.get("visible", True)]
         if not views:
-            reasons["bosh"] += 1; continue
+            reasons["empty"] += 1; continue
         root_b = views[0]["bounds"]
         if root_b[1][0] > root_b[1][1]:
-            reasons["gorizontal"] += 1; continue
+            reasons["landscape"] += 1; continue
         pkg = (d.get("foreground_activity") or "?").split("/")[0]
         if is_system(pkg):
-            reasons["tizim_oynasi"] += 1; continue
+            reasons["system_window"] += 1; continue
         cls = [v.get("class") or "" for v in views]
         if any("WebView" in c for c in cls):
             reasons["webview"] += 1; continue
         if sum(c == "android.view.View" for c in cls) / len(cls) > MAX_GENERIC:
-            reasons["nomsiz_view"] += 1; continue
+            reasons["generic_views"] += 1; continue
         if not MIN_VIEWS <= len(views) <= MAX_VIEWS:
-            reasons["element_soni"] += 1; continue
+            reasons["node_count"] += 1; continue
         if not any((v.get("text") or "").strip() for v in views):
-            reasons["matnsiz"] += 1; continue
+            reasons["no_text"] += 1; continue
         try:
             im = Image.open(io.BytesIO(img)).convert("RGB")
             if im.size[0] != W or im.size[1] < BOTTOM:
-                reasons["rasm_olchami"] += 1; continue
+                reasons["bad_image_size"] += 1; continue
             buf = io.BytesIO(); im.crop((0, TOP, W, BOTTOM)).save(buf, "JPEG", quality=90)
         except Exception:
-            reasons["rasm_xato"] += 1; continue
-        # koordinatalarni kesilgan rasmga moslash, kerakli maydonlarni qoldirish
+            reasons["image_error"] += 1; continue
+        # shift coordinates to the cropped image, keep only the needed fields
         idmap = {v["temp_id"]: i for i, v in enumerate(views)}
         slim = []
         for v in views:
@@ -83,7 +83,7 @@ def process(group):
         rows["layout_key"].append(f"{pkg}|{d.get('state_str_content_free', '')}")
         rows["image"].append(buf.getvalue())
         rows["views"].append(json.dumps(slim, ensure_ascii=False))
-        reasons["qoldi"] += 1
+        reasons["kept"] += 1
     if rows["id"]:
         pq.write_table(pa.table(rows), f"{OUT}/shard_{group:03d}.parquet")
     return group, len(imgs), reasons
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     with Pool(12) as pool:
         for i, (g, n, r) in enumerate(pool.imap_unordered(process, range(G)), 1):
             total.update(r); seen += n
-            print(f"\r{i}/{G} guruh ({i / G * 100:.0f}%)  ko'rildi {seen}  qoldi {total['qoldi']}  {time.time() - t0:.0f}s",
+            print(f"\r{i}/{G} groups ({i / G * 100:.0f}%)  seen {seen}  kept {total['kept']}  {time.time() - t0:.0f}s",
                   end="", file=sys.stderr, flush=True)
     print(file=sys.stderr)
     keys = set()
@@ -105,6 +105,6 @@ if __name__ == "__main__":
     pkgs = set()
     for f in sorted(os.listdir(OUT)):
         pkgs.update(pq.read_table(f"{OUT}/{f}", columns=["package"]).column(0).to_pylist())
-    report = {"korildi": seen, **dict(total), "ilovalar": len(pkgs), "noyob_layout": len(keys)}
+    report = {"seen": seen, **dict(total), "apps": len(pkgs), "unique_layouts": len(keys)}
     json.dump(report, open(f"{ROOT}/reports/clean_report.json", "w"), indent=1, ensure_ascii=False)
     print(json.dumps(report, indent=1, ensure_ascii=False))

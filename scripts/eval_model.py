@@ -1,21 +1,21 @@
-"""Imtihon: model 200 ta yangi ekran rasmidan kod yozadi -> kompilyatsiya -> Paparazzi render -> asl rasm bilan solishtirish.
+"""Evaluation: the model writes code for 200 unseen screenshots -> compile -> Paparazzi render -> compare with the original.
 
-Ikki bosqich:
-  gen   (GPU)   : model kod yozadi -> data/eval/<nom>/gen.parquet   (to'xtasa davom etadi)
-  score (Gradle): kod kompilyatsiya + render + baho -> reports/eval_<nom>.json, data/eval/<nom>/scored.parquet
+Two stages:
+  gen   (GPU)   : the model writes code -> data/eval/<name>/gen.parquet   (resumable)
+  score (Gradle): compile + render + score -> reports/eval_<name>.json, data/eval/<name>/scored.parquet
 
-Misollar:
+Examples:
   scripts/eval.sh gen   --name sft5k --adapter runs/sft_5k/final
-  scripts/eval.sh gen   --name qwen_base                 # adaptersiz asl Qwen3.5-4B
+  scripts/eval.sh gen   --name qwen_base                 # base Qwen3.5-4B without the adapter
   scripts/eval.sh score --name sft5k
-  scripts/eval.sh score --name reference                 # bizning konverter kodi (taqqoslash uchun yuqori chegara)
+  scripts/eval.sh score --name reference                 # the rule converter's code (upper bound for comparison)
 
-Baholar (har bir ekran):
-  compiled  - kod kompilyatsiyadan o'tdimi
-  rendered  - ekran chizildimi (ishlash vaqtida xato bermadimi)
-  vis_sim   - render va asl rasm tuzilishi o'xshashligi (0..1, run_batch.vis_sim bilan bir xil)
-  text_recall - asl ekrandagi matnlarning qanchasi kodda bor (0..1)
-Kompilyatsiya/render bo'lmagan ekran vis_sim = 0 oladi (o'rtacha hamma 200 ta ekran bo'yicha).
+Per-screen scores:
+  compiled    - the code compiles
+  rendered    - the screen renders (no runtime error)
+  vis_sim     - structural similarity of render and original (0..1, same as run_batch.vis_sim)
+  text_recall - share of the original screen's texts that appear in the code (0..1)
+Screens that fail to compile or render get vis_sim = 0 (the mean is over all 200 screens).
 """
 import argparse, io, json, os, re, shutil, statistics, sys, time
 
@@ -27,25 +27,25 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEST = f"{ROOT}/data/sft/test_200.parquet"
 
 
-# ------------------------------------------------------------------ kodni ajratib olish
+# ------------------------------------------------------------------ code extraction
 def extract_code(text):
-    """Model javobidan Kotlin kodini ajratadi (``` bloklari, <think> va h.k.)."""
+    """Extracts Kotlin code from the model output (``` blocks, <think>, etc.)."""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
     blocks = re.findall(r"```(?:kotlin|kt)?\s*\n(.*?)```", text, flags=re.S)
     if blocks:
         text = max(blocks, key=len)
-    elif "```" in text:  # yopilmagan blok (javob kesilgan)
+    elif "```" in text:  # unclosed block (truncated output)
         text = text.split("```", 1)[1].split("\n", 1)[-1]
     return text.strip()
 
 
 def texts_in(code):
-    """Koddagi satr literallari (matnlar) to'plami."""
+    """Set of string literals (texts) in the code."""
     return {m.encode().decode("unicode_escape", "ignore") if "\\u" in m else m
             for m in re.findall(r'"((?:[^"\\\n]|\\.){2,})"', code)}
 
 
-# ------------------------------------------------------------------ gen bosqichi
+# ------------------------------------------------------------------ gen stage
 def gen(a):
     import torch
     from train_sft import load_model, load_image, prompt_text
@@ -69,7 +69,7 @@ def gen(a):
         ks = todo[s:s + a.batch]
         enc = processor(text=[ptext] * len(ks), images=[load_image(imgs[k]) for k in ks],
                         return_tensors="pt", padding=True).to("cuda")
-        # --sample: Qwen tavsiya qilgan sozlama (non-thinking): temperature 0.7, top_p 0.8, top_k 20
+        # --sample: Qwen's recommended non-thinking settings: temperature 0.7, top_p 0.8, top_k 20
         gk = (dict(do_sample=True, temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05) if a.sample
               else dict(do_sample=False))
         torch.manual_seed(s)
@@ -82,11 +82,11 @@ def gen(a):
         pq.write_table(pa.Table.from_pylist(list(done.values())), path)
         el = time.time() - t0; n = len(done) - n0
         print(f"{time.strftime('%H:%M:%S')} [{a.name}] {len(done)}/{len(ids)} ({len(done)/len(ids)*100:.0f}%)  "
-              f"{el/n:.1f} s/ekran  qoldi ~{el/n*(len(ids)-len(done))/60:.0f} daq", flush=True)
+              f"{el/n:.1f} s/screen  ~{el/n*(len(ids)-len(done))/60:.0f} min left", flush=True)
 
 
-# ------------------------------------------------------------------ score bosqichi
-# IDE'dagi "auto-import" o'rnini bosadi: model unutgan standart importlar (barcha modellarga bir xil qo'shiladi).
+# ------------------------------------------------------------------ score stage
+# Stands in for IDE auto-import: standard imports the model may forget (added the same way for every model).
 AUTO_IMPORTS = [f"import {p}" for p in (
     "androidx.compose.runtime.*", "androidx.compose.foundation.lazy.*", "androidx.compose.foundation.lazy.grid.*",
     "androidx.compose.foundation.text.*", "androidx.compose.ui.draw.*", "androidx.compose.ui.graphics.*",
@@ -96,9 +96,9 @@ AUTO_IMPORTS = [f"import {p}" for p in (
 
 
 def kotlin_file(sid, code):
-    """Har bir ekran o'z paketida (nomlar to'qnashmasligi uchun). Standart importlar + modelning importlari."""
+    """Each screen gets its own package (avoids name clashes). Standard imports + the model's imports."""
     from vh2compose import IMPORTS
-    # @Preview zararsiz, lekin ui-tooling kutubxonasi loyihada yo'q -> olib tashlanadi (barcha modellarga bir xil)
+    # @Preview is harmless, but ui-tooling is not in the project -> removed (same for every model)
     code = re.sub(r"@Preview(\([^)]*\))?", "", code)
     lines = code.split("\n")
     imports = [l.strip() for l in lines if l.strip().startswith("import ") and "tooling.preview" not in l]
@@ -140,7 +140,7 @@ def score(a):
         rc, log = gradle(work, rtmp)
         bad = {int(m) for m in re.findall(r"e: file://\S*/gen/s(\d+)\.kt:", log)}
         bad |= {int(m) for m in re.findall(r"Method too large: \S*?/s(\d+)/", log)}
-        # All.kt dagi xato (masalan, Screen private yoki parametr talab qiladi) -> o'sha qatordagi ekran
+        # an error in All.kt (e.g. Screen is private or needs parameters) -> the screen on that line
         all_lines = open(f"{gen}/All.kt").read().split("\n")
         for ln in re.findall(r"e: file://\S*/gen/All\.kt:(\d+):", log):
             m = re.search(r"\bS(\d+)\b", all_lines[int(ln) - 1])
@@ -148,15 +148,15 @@ def score(a):
                 bad.add(int(m.group(1)))
         if not bad:
             break
-        with open(f"{out_dir}/compile_errors.log", "w" if attempt == 0 else "a") as fh:  # tahlil uchun
+        with open(f"{out_dir}/compile_errors.log", "w" if attempt == 0 else "a") as fh:  # kept for analysis
             fh.write("\n".join(l for l in log.split("\n") if l.startswith("e: ")) + "\n")
         compile_fail |= bad
         alive = [i for i in alive if i not in bad]
-        print(f"  urinish {attempt + 1}: {len(bad)} ta ekran kompilyatsiyadan o'tmadi, qoldi {len(alive)}", flush=True)
+        print(f"  attempt {attempt + 1}: {len(bad)} screens failed to compile, {len(alive)} left", flush=True)
     else:
-        raise RuntimeError("12 urinishda ham kompilyatsiya tugamadi")
+        raise RuntimeError("Still not compiling after 12 attempts")
     if rc != 0 and not os.path.isdir(rtmp):
-        raise RuntimeError("Gradle xatosi:\n" + log[-3000:])
+        raise RuntimeError("Gradle error:\n" + log[-3000:])
     failed = {}
     if os.path.exists(f"{rtmp}/failures.txt"):
         for l in open(f"{rtmp}/failures.txt"):
@@ -174,20 +174,20 @@ def score(a):
                      "vis_sim": round(vis_sim(test[i]["image"], rb), 3) if rendered else 0.0,
                      "text_recall": round(sum(x in c for x in rt) / len(rt), 3) if rt else 1.0,
                      "new_tokens": raw_len.get(i), "render_png": rb,
-                     "error": failed.get(i) or ("kompilyatsiya" if i in compile_fail else
-                                                ("Screen() yo'q" if not has_fn.get(i, False) else None))})
+                     "error": failed.get(i) or ("compile_error" if i in compile_fail else
+                                                ("no_screen_fn" if not has_fn.get(i, False) else None))})
     pq.write_table(pa.Table.from_pylist(rows), f"{out_dir}/scored.parquet")
     shutil.rmtree(rtmp, ignore_errors=True)
     n = len(rows)
     vs = [r["vis_sim"] for r in rows]
-    rep = {"nom": a.name, "ekranlar": n,
-           "kompilyatsiya_%": round(sum(r["compiled"] for r in rows) / n * 100, 1),
+    rep = {"name": a.name, "screens": n,
+           "compile_%": round(sum(r["compiled"] for r in rows) / n * 100, 1),
            "render_%": round(sum(r["rendered"] for r in rows) / n * 100, 1),
-           "vis_sim_ortacha": round(statistics.mean(vs), 3),
-           "vis_sim_mediana": round(statistics.median(vs), 3),
-           "vis_sim_0.7_dan_yuqori_%": round(sum(v >= 0.7 for v in vs) / n * 100, 1),
-           "matn_topildi_ortacha": round(statistics.mean(r["text_recall"] for r in rows), 3),
-           "screen_fn_yoq": sum(not r["has_screen_fn"] for r in rows)}
+           "vis_sim_mean": round(statistics.mean(vs), 3),
+           "vis_sim_median": round(statistics.median(vs), 3),
+           "vis_sim_at_least_0.7_%": round(sum(v >= 0.7 for v in vs) / n * 100, 1),
+           "text_recall_mean": round(statistics.mean(r["text_recall"] for r in rows), 3),
+           "no_screen_fn": sum(not r["has_screen_fn"] for r in rows)}
     json.dump(rep, open(f"{ROOT}/reports/eval_{a.name}.json", "w"), indent=1, ensure_ascii=False)
     print(json.dumps(rep, indent=1, ensure_ascii=False))
 
@@ -201,6 +201,6 @@ if __name__ == "__main__":
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--max-new", type=int, default=4096)
     ap.add_argument("--workdir", default="render")
-    ap.add_argument("--sample", action="store_true", help="greedy o'rniga Qwen tavsiya qilgan sampling")
+    ap.add_argument("--sample", action="store_true", help="use Qwen's recommended sampling instead of greedy")
     a = ap.parse_args()
     (gen if a.stage == "gen" else score)(a)

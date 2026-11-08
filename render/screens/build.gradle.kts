@@ -14,7 +14,7 @@ android {
 }
 kotlin {
     jvmToolchain(17)
-    // imtihon: Material3/Foundation "experimental" API'lari uchun @OptIn talab qilinmasin (barcha modellarga bir xil)
+    // evaluation: no @OptIn needed for Material3/Foundation "experimental" APIs (same for every model)
     compilerOptions {
         optIn.addAll("androidx.compose.material3.ExperimentalMaterial3Api",
                      "androidx.compose.foundation.ExperimentalFoundationApi",

@@ -12,7 +12,7 @@ import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 
-/** Har bir snapshot'ni asl o'lchamda (1080x1704) PNG qilib saqlaydi. */
+/** Saves every snapshot as a full-size (1080x1704) PNG. */
 class FullResHandler(private val dir: File) : SnapshotHandler {
     override fun newFrameHandler(snapshot: Snapshot, frameCount: Int, fps: Int) = object : SnapshotHandler.FrameHandler {
         override fun handle(image: BufferedImage) {

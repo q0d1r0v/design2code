@@ -1,6 +1,6 @@
-"""1-qadam: MobileViews'dan namuna olib ko'rish.
-Birinchi N ta qatorni o'qiydi, 8 ta namunani (jpg + json) saqlaydi va statistika chiqaradi.
-Ishga tushirish: ~/uz-model/.venv/bin/python -I scripts/inspect_sample.py
+"""Step 1: take a first look at MobileViews.
+Reads the first N rows, saves 8 samples (jpg + json) and prints statistics.
+Run: .venv-train/bin/python -I scripts/inspect_sample.py [N]
 """
 import collections, io, json, os, sys
 import pyarrow.parquet as pq
@@ -13,7 +13,7 @@ os.makedirs(OUT, exist_ok=True)
 
 
 def walk(node, depth=0):
-    """View hierarchy tugunlarini aylanib chiqadi."""
+    """Walks the view hierarchy nodes."""
     if not isinstance(node, dict):
         return
     yield node, depth
@@ -36,7 +36,7 @@ for batch in pf.iter_batches(batch_size=200, columns=["image_content", "json_con
         vh = json.loads(js) if isinstance(js, str) else js
         root = vh if isinstance(vh, dict) else {}
         views = root.get("views") or []
-        # DroidBot formati: tekis ro'yxat, har bir view'da parent indeksi bor
+        # DroidBot format: a flat list, each view has a parent index
         depth = {}
         for v in views:
             p = v.get("parent", -1)
@@ -73,19 +73,19 @@ print(file=sys.stderr)
 
 def stat(xs):
     xs = sorted(xs)
-    return f"o'rtacha {sum(xs) / len(xs):.0f}, mediana {xs[len(xs) // 2]}, max {xs[-1]}"
+    return f"mean {sum(xs) / len(xs):.0f}, median {xs[len(xs) // 2]}, max {xs[-1]}"
 
 
-print(f"Ko'rilgan ekranlar: {done}")
-print(f"View kalitlari: {sorted(keys_seen)}")
-print(f"Birinchi rasm o'lchami: {sizes[:1]}")
-print(f"Ekrandagi elementlar soni: {stat(nodes_per_screen)}")
-print(f"Matnli elementlar: {stat(texts_per_screen)}")
-print(f"Daraxt chuqurligi: {stat(depths)}")
-print(f"Deyarli bo'sh ekranlar (<=3 element): {empty_screens} ({empty_screens / done * 100:.1f}%)")
-print(f"Compose ishlatgan ekranlar: {compose_screens} ({compose_screens / done * 100:.1f}%)")
-print(f"WebView bor ekranlar: {webview_screens} ({webview_screens / done * 100:.1f}%)")
-print("Eng ko'p uchraydigan 20 element turi:")
+print(f"Screens read: {done}")
+print(f"View keys: {sorted(keys_seen)}")
+print(f"First image size: {sizes[:1]}")
+print(f"Nodes per screen: {stat(nodes_per_screen)}")
+print(f"Text nodes: {stat(texts_per_screen)}")
+print(f"Tree depth: {stat(depths)}")
+print(f"Almost empty screens (<=3 nodes): {empty_screens} ({empty_screens / done * 100:.1f}%)")
+print(f"Screens using Compose: {compose_screens} ({compose_screens / done * 100:.1f}%)")
+print(f"Screens with a WebView: {webview_screens} ({webview_screens / done * 100:.1f}%)")
+print("Top 20 node classes:")
 total = sum(cls_count.values())
 for c, k in cls_count.most_common(20):
     print(f"  {c:35s} {k:7d}  {k / total * 100:5.1f}%")

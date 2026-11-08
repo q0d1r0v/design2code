@@ -1,11 +1,11 @@
 {
- "nom": "qwen_base",
- "ekranlar": 200,
- "kompilyatsiya_%": 10.0,
+ "name": "qwen_base",
+ "screens": 200,
+ "compile_%": 10.0,
  "render_%": 10.0,
- "vis_sim_ortacha": 0.013,
- "vis_sim_mediana": 0.0,
- "vis_sim_0.7_dan_yuqori_%": 0.0,
- "matn_topildi_ortacha": 0.371,
- "screen_fn_yoq": 110
+ "vis_sim_mean": 0.013,
+ "vis_sim_median": 0.0,
+ "vis_sim_at_least_0.7_%": 0.0,
+ "text_recall_mean": 0.371,
+ "no_screen_fn": 110
 }

@@ -1,11 +1,11 @@
-"""Butun parquet bo'ylab tasodifiy namuna: ilovalar xilma-xilligi, WebView, Compose ulushi, pastki qora qism."""
+"""Random sample across the whole parquet: app variety, WebView and Compose share, bottom black area."""
 import collections, json, os, random, sys
 import pyarrow.parquet as pq
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PARQ = os.path.join(ROOT, "data/raw/mobileviews/MobileViews_Screenshots_ViewHierarchies/Parquets/MobileViews_400000-522301.parquet")
 OUT = os.path.join(ROOT, "data/sample_random"); os.makedirs(OUT, exist_ok=True)
 pf = pq.ParquetFile(PARQ)
-G = pf.num_row_groups; print("row group'lar:", G, "| qatorlar:", pf.metadata.num_rows)
+G = pf.num_row_groups; print("row groups:", G, "| rows:", pf.metadata.num_rows)
 random.seed(0)
 groups = sorted(random.sample(range(G), min(40, G)))
 apps = collections.Counter(); n = web = comp = flutter_like = 0; content_bottom = []
@@ -29,7 +29,7 @@ for i, g in enumerate(groups):
     print(f"\r{i+1}/{len(groups)} ({(i+1)/len(groups)*100:.0f}%)", end="", file=sys.stderr)
 print(file=sys.stderr)
 cb = sorted(content_bottom)
-print(f"Namuna: {n} ekran, {len(apps)} xil ilova")
-print(f"WebView bor: {web/n*100:.1f}% | Compose: {comp/n*100:.1f}% | elementlarining >50% i nomsiz 'View' (Compose/Flutter/RN bo'lishi mumkin): {flutter_like/n*100:.1f}%")
-print(f"Kontent pastki chegarasi (px): mediana {cb[len(cb)//2]}, 90-foiz {cb[int(len(cb)*.9)]}  (rasm balandligi 2340)")
-print("Eng ko'p ekranli ilovalar:", apps.most_common(5))
+print(f"Sample: {n} screens, {len(apps)} apps")
+print(f"WebView: {web/n*100:.1f}% | Compose: {comp/n*100:.1f}% | >50% generic 'View' nodes (maybe Compose/Flutter/RN): {flutter_like/n*100:.1f}%")
+print(f"Content bottom edge (px): median {cb[len(cb)//2]}, 90th percentile {cb[int(len(cb)*.9)]}  (image height 2340)")
+print("Apps with the most screens:", apps.most_common(5))

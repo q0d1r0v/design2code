@@ -1,4 +1,4 @@
-# Muhit o'zgaruvchilari (Gradle/Java'ni qo'lda ishlatish uchun):  source env.sh
+# Environment variables for running Gradle/Java by hand:  source env.sh
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export JAVA_HOME=$(ls -d "$ROOT"/tools/jdk-17* | head -1)
 export ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk}

@@ -1,10 +1,10 @@
-"""3-qadam yakuniy hisoboti: barcha guruhlarni tekshiradi va reports/pairs_report.json yozadi.
+"""Final report for step 3: checks every batch and writes reports/pairs_report.json.
 
-Tekshiruvlar:
-  * har bir guruh fayli o'qiladi (buzilmaganmi), skips.json bor-yo'qligi;
-  * barcha toza ekranlar (81 048) qamrab olinganmi: har bir id yo juftlikda, yo tashlab yuborilganlar hisobida;
-  * takroriy id yo'qligi;
-  * render PNG'lar ochiladimi (namuna), kodda Screen() funksiyasi bormi.
+Checks:
+  * every batch file can be read (not corrupt) and has a skips.json;
+  * coverage: every clean screen (81,048) is either a pair or counted as dropped;
+  * no duplicate ids;
+  * rendered PNGs open (sample) and the code has a Screen() function.
 """
 import collections, glob, io, json, os, random, statistics
 
@@ -14,12 +14,17 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLEAN = f"{ROOT}/data/clean"
 PAIRS = f"{ROOT}/data/pairs"
+# skip reasons written by older versions of the scripts -> current names
+LEGACY = {"kirdi": "in", "chiqdi": "out", "render_xatolari": "render_errors", "funksiya_juda_katta": "function_too_large",
+          "juda_kam_element": "too_few_nodes", "juda_kop_element": "too_many_nodes", "bosh_ekran": "empty_screen",
+          "bosh_daraxt": "empty_tree", "rasm_olchami": "bad_image_size", "kompilyatsiya_xato": "compile_error",
+          "render_xato": "render_error", "png_yoq": "png_missing", "konverter_xato": "converter_error"}
 
 clean_total = sum(pq.ParquetFile(f"{CLEAN}/{f}").metadata.num_rows for f in os.listdir(CLEAN))
 files = sorted(glob.glob(f"{PAIRS}/batch_*.parquet"))
 ids, vis, nodes, sync = [], [], [], []
 skips = collections.Counter()
-kirdi = 0
+n_in = 0
 missing_skips, bad_files = [], []
 for f in files:
     try:
@@ -31,11 +36,12 @@ for f in files:
     sj = f.replace(".parquet", ".skips.json")
     if not os.path.exists(sj):
         missing_skips.append(f); continue
-    d = json.load(open(sj))
-    kirdi += d.pop("kirdi"); d.pop("chiqdi"); d.pop("render_xatolari", None)
+    d = {LEGACY.get(k.split(":")[0], k.split(":")[0]) + (":" + k.split(":", 1)[1] if ":" in k else ""): v
+         for k, v in json.load(open(sj)).items()}
+    n_in += d.pop("in"); d.pop("out"); d.pop("render_errors", None)
     skips.update({k: v for k, v in d.items() if v})
 
-# namuna: 300 ta tasodifiy juftlikning PNG va kodini tekshirish
+# sample: check PNG and code of 300 random pairs
 random.seed(0)
 png_bad = code_bad = 0
 for f in random.sample(files, min(30, len(files))):
@@ -51,22 +57,22 @@ for f in random.sample(files, min(30, len(files))):
 
 dup = len(ids) - len(set(ids))
 report = {
-    "toza_ekranlar": clean_total,
-    "guruhlar": len(files),
-    "kirgan_ekranlar": kirdi,
-    "juftliklar": len(ids),
-    "takroriy_id": dup,
-    "tashlab_yuborilgan": dict(skips),
-    "tashlab_yuborilgan_jami": sum(skips.values()),
-    "qamrov_tekshiruvi": kirdi == clean_total and kirdi == len(ids) + sum(skips.values()),
-    "buzilgan_fayllar": bad_files,
-    "skips_json_yoq": missing_skips,
-    "namuna_png_xato": png_bad,
-    "namuna_kod_xato": code_bad,
-    "vis_sim_mediana": round(statistics.median(vis), 3) if vis else None,
-    "vis_sim_0.5_dan_yuqori_%": round(sum(v >= 0.5 for v in vis) / len(vis) * 100, 1) if vis else None,
-    "vis_sim_0.7_dan_yuqori_%": round(sum(v >= 0.7 for v in vis) / len(vis) * 100, 1) if vis else None,
-    "element_mediana": statistics.median(nodes) if nodes else None,
+    "clean_screens": clean_total,
+    "batches": len(files),
+    "screens_in": n_in,
+    "pairs": len(ids),
+    "duplicate_ids": dup,
+    "dropped": dict(skips),
+    "dropped_total": sum(skips.values()),
+    "coverage_ok": n_in == clean_total and n_in == len(ids) + sum(skips.values()),
+    "corrupt_files": bad_files,
+    "missing_skips_json": missing_skips,
+    "sample_png_errors": png_bad,
+    "sample_code_errors": code_bad,
+    "vis_sim_median": round(statistics.median(vis), 3) if vis else None,
+    "vis_sim_at_least_0.5_%": round(sum(v >= 0.5 for v in vis) / len(vis) * 100, 1) if vis else None,
+    "vis_sim_at_least_0.7_%": round(sum(v >= 0.7 for v in vis) / len(vis) * 100, 1) if vis else None,
+    "nodes_median": statistics.median(nodes) if nodes else None,
     "disk_GB": round(sum(os.path.getsize(f) for f in files) / 1e9, 2),
 }
 json.dump(report, open(f"{ROOT}/reports/pairs_report.json", "w"), indent=1, ensure_ascii=False)

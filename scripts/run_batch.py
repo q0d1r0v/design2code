@@ -1,12 +1,12 @@
-"""3-qadam: ekranlarni Compose kodiga aylantirish, kompilyatsiya qilish va Paparazzi bilan rasmga olish.
+"""Step 3: convert screens to Compose code, compile them and render them with Paparazzi.
 
-Har bir guruh (batch): N ta ekran -> Kotlin fayllar -> gradle test -> PNG'lar.
-Kompilyatsiya xatosi bo'lsa, xato bergan ekranlar olib tashlanib, qayta urinadi (3 martagacha).
-Natija: data/pairs/batch_XXXX.parquet  (id, package, code, render_png, nodes)
-         data/pairs/batch_XXXX.skips.json (tashlab yuborilganlar sababi bilan)
+Each batch: N screens -> Kotlin files -> gradle test -> PNGs.
+On compile errors the failing screens are removed and the build is retried (up to 8 times).
+Output: data/pairs/batch_XXXX.parquet    (id, package, code, render_png, nodes, sync, vis_sim)
+        data/pairs/batch_XXXX.skips.json (dropped screens with reasons)
 
-Ishga tushirish:
-  .venv/bin/python -I scripts/run_batch.py --start 0 --count 100 --batch-size 100 --workdir render
+Run:
+  .venv-train/bin/python -I scripts/run_batch.py --start 0 --count 100 --batch-size 100 --workdir render
 """
 import argparse, collections, json, os, re, shutil, subprocess, sys, time
 
@@ -27,11 +27,11 @@ PER_FILE = 25
 
 
 def vis_sim(orig_bytes, render_bytes):
-    """Asl rasm va render o'xshashligi (0..1): kichraytirilgan kulrang tasvirlar tuzilishining korrelyatsiyasi."""
+    """Similarity of original and render (0..1): correlation of edge maps of downscaled grayscale images."""
     def prep(b):
         im = Image.open(io.BytesIO(b)).convert("L").resize((64, 101), Image.BILINEAR).filter(ImageFilter.GaussianBlur(1))
         a = np.asarray(im, float)
-        e = np.abs(np.diff(a, axis=0))[:, :-1] + np.abs(np.diff(a, axis=1))[:-1, :]  # chegaralar xaritasi
+        e = np.abs(np.diff(a, axis=0))[:, :-1] + np.abs(np.diff(a, axis=1))[:-1, :]  # edge map
         return e.ravel()
     x, y = prep(orig_bytes), prep(render_bytes)
     if x.std() < 1e-6 or y.std() < 1e-6:
@@ -40,10 +40,10 @@ def vis_sim(orig_bytes, render_bytes):
 
 
 def iter_clean(start, count):
-    """Toza shard'lardan ketma-ket (id, package, image, views) qaytaradi."""
+    """Yields (id, package, image, views) from the clean shards in order."""
     i = 0
     for f in sorted(os.listdir(CLEAN)):
-        n = pq.ParquetFile(f"{CLEAN}/{f}").metadata.num_rows  # o'qimasdan qator sonini bilish
+        n = pq.ParquetFile(f"{CLEAN}/{f}").metadata.num_rows  # row count without reading the data
         if i + n <= start:
             i += n
             continue
@@ -82,9 +82,9 @@ def write_sources(workdir, items):
 
 
 def bad_screens_from_errors(log, gen, fmap):
-    """Kompilyator xatolaridan qaysi ekran funksiyasida xato borligini topadi."""
+    """Finds which screen functions caused compiler errors."""
     bad = set()
-    # JVM 64 KB chegarasi: "Method too large: .../G0009Kt.S483480 (...)"
+    # JVM 64 KB limit: "Method too large: .../G0009Kt.S483480 (...)"
     for m in re.finditer(r"Method too large: \S*?/G\d+Kt\.S(\d+)\b", log):
         bad.add(int(m.group(1)))
     for m in re.finditer(r"e: file://\S*/gen/(G\d+\.kt):(\d+):", log):
@@ -120,8 +120,8 @@ def run(batch_no, rows, workdir):
         except Skip as e:
             skips[str(e)] += 1
             continue
-        except Exception as e:  # konverter xatosi -> sababi bilan hisobga olinadi
-            skips["konverter_xato:" + type(e).__name__] += 1
+        except Exception as e:  # converter crash -> counted with its reason
+            skips["converter_error:" + type(e).__name__] += 1
             continue
         items.append((sid, code))
         meta[sid] = (pkg, code, nodes, sync)
@@ -129,7 +129,7 @@ def run(batch_no, rows, workdir):
     for attempt in range(8):
         shutil.rmtree(out, ignore_errors=True)
         gen, fmap = write_sources(workdir, items)
-        for g_try in range(3):  # vaqtinchalik Gradle xatolari (masalan, xotira) uchun qayta urinish
+        for g_try in range(3):  # retry transient Gradle failures (e.g. memory)
             rc, log = gradle(workdir, out)
             if rc == 0 or "e: file://" in log or "Method too large" in log:
                 break
@@ -139,27 +139,27 @@ def run(batch_no, rows, workdir):
             break
         bad = bad_screens_from_errors(log, gen, fmap)
         if not bad:
-            raise RuntimeError("Kompilyatsiya xatosi, lekin ekran topilmadi:\n" + log[-3000:])
-        skips["kompilyatsiya_xato"] += len(bad)
+            raise RuntimeError("Compile error, but no screen could be identified:\n" + log[-3000:])
+        skips["compile_error"] += len(bad)
         open(f"{PAIRS}/batch_{batch_no:06d}.compile_errors.log", "a").write(log[-20000:] + "\n")
         items = [x for x in items if x[0] not in bad]
     else:
-        raise RuntimeError("8 urinishda ham kompilyatsiya bo'lmadi")
+        raise RuntimeError("Still not compiling after 8 attempts")
     if rc != 0 and not os.path.isdir(out):
-        raise RuntimeError("Gradle xatosi:\n" + log[-3000:])
+        raise RuntimeError("Gradle error:\n" + log[-3000:])
     failed = {}
     if os.path.exists(f"{out}/failures.txt"):
         for l in open(f"{out}/failures.txt"):
             sid, msg = l.rstrip("\n").split("\t", 1)
             failed[int(sid)] = msg
-    skips["render_xato"] += len(failed)
+    skips["render_error"] += len(failed)
     rec = {"id": [], "package": [], "code": [], "render_png": [], "nodes": [], "sync": [], "vis_sim": []}
     for sid, _ in items:
         png = f"{out}/{sid}.png"
         if sid in failed:
             continue
         if not os.path.exists(png):
-            skips["png_yoq"] += 1
+            skips["png_missing"] += 1
             continue
         pkg, code, nodes, sync = meta[sid]
         rec["id"].append(sid); rec["package"].append(pkg)
@@ -167,7 +167,7 @@ def run(batch_no, rows, workdir):
         rec["render_png"].append(open(png, "rb").read()); rec["nodes"].append(nodes); rec["sync"].append(round(sync, 3))
         rec["vis_sim"].append(round(vis_sim(origs[sid], rec["render_png"][-1]), 3))
     pq.write_table(pa.table(rec), f"{PAIRS}/batch_{batch_no:06d}.parquet")
-    json.dump({"kirdi": len(rows), "chiqdi": len(rec["id"]), **skips, "render_xatolari": failed},
+    json.dump({"in": len(rows), "out": len(rec["id"]), **skips, "render_errors": failed},
               open(f"{PAIRS}/batch_{batch_no:06d}.skips.json", "w"), indent=1, ensure_ascii=False)
     shutil.rmtree(out, ignore_errors=True)
     return len(rows), len(rec["id"]), skips
@@ -179,7 +179,7 @@ if __name__ == "__main__":
     ap.add_argument("--count", type=int, default=100)
     ap.add_argument("--batch-size", type=int, default=500)
     ap.add_argument("--workdir", default="render")
-    ap.add_argument("--reverse", action="store_true", help="guruhlarni oxiridan boshlab ishlash (yordamchi ishchi uchun)")
+    ap.add_argument("--reverse", action="store_true", help="process batches from the end (for a second worker)")
     a = ap.parse_args()
     workdir = f"{ROOT}/{a.workdir}"
     t0, tot_in, tot_out, tot_sk = time.time(), 0, 0, collections.Counter()
@@ -187,16 +187,16 @@ if __name__ == "__main__":
     order = list(range(a.start, a.start + a.count, a.batch_size))
     if a.reverse:
         order.reverse()
-    for bn in order:  # guruh nomi = birinchi ekranning tartib raqami
+    for bn in order:  # batch name = index of its first screen
         n = min(a.batch_size, a.start + a.count - bn)
-        if os.path.exists(f"{PAIRS}/batch_{bn:06d}.parquet"):  # oldin tayyor bo'lgan -> o'tkazib yuborish
+        if os.path.exists(f"{PAIRS}/batch_{bn:06d}.parquet"):  # already done -> skip
             tot_in += n
             continue
-        rows = list(iter_clean(bn, n))  # faqat shu guruh xotiraga yuklanadi
+        rows = list(iter_clean(bn, n))  # only this batch is loaded into memory
         if not rows:
             break
         n_in, n_out, sk = run(bn, rows, workdir)
         tot_in += n_in; tot_out += n_out; tot_sk.update(sk)
         el = time.time() - t0
-        print(f"[{a.workdir}] {tot_in}/{total} ({tot_in / total * 100:.1f}%)  juftlik {tot_out}  "
+        print(f"[{a.workdir}] {tot_in}/{total} ({tot_in / total * 100:.1f}%)  pairs {tot_out}  "
               f"{el:.0f}s  {dict(tot_sk)}", flush=True)

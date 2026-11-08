@@ -1,7 +1,7 @@
 {
  "train": 5000,
  "test": 200,
- "test_ilovalar": 200,
- "train_ilovalar": 1982,
- "kesishgan_ilova": 0
+ "test_apps": 200,
+ "train_apps": 1982,
+ "overlapping_apps": 0
 }
